@@ -151,6 +151,13 @@ object MedtronicProtocol {
 
     /** Insulin Delivery (IDD) service (0x100, vendor base): reservoir, therapy state, IOB, basal. */
     val IDD_SERVICE_UUID: UUID = vendorUuid(0x100)
+
+    /**
+     * IDD Status Changed (0x101, Read/Indicate): the pump pushes a flags word here when state changes
+     * (therapy control, basal/bolus, therapy-algorithm/SmartGuard, IOB, new CGM measurement, sensor).
+     * Basis for event-driven ("push") updates instead of polling. See docs/PUMP-DATA.md.
+     */
+    val IDD_STATUS_CHANGED_UUID: UUID = vendorUuid(0x101)
     val IDD_STATUS_UUID: UUID = vendorUuid(0x102)
     val IDD_FEATURES_UUID: UUID = vendorUuid(0x104)
     val IDD_SRCP_UUID: UUID = vendorUuid(0x105)

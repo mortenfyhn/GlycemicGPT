@@ -28,6 +28,7 @@
  */
 package com.glycemicgpt.mobile.ble.read
 
+import com.glycemicgpt.mobile.ble.protocol.MedtronicProtocol
 import com.glycemicgpt.mobile.ble.sake.MedtronicSakeSession
 import com.glycemicgpt.mobile.domain.model.BasalReading
 import com.glycemicgpt.mobile.domain.model.BatteryStatus
@@ -126,6 +127,45 @@ class MedtronicReadGateway(
         sessionRead("therapy-states") { link, session, onResult ->
             IddStatusReader(link, session).readTherapyAlgorithmStates(onResult)
         }
+
+    /**
+     * EXPERIMENTAL push probe. Persistent subscription to IDD Status Changed (0x101): the pump
+     * indicates a (SAKE-encrypted) flags word on any state change. Delivers the decrypted indication
+     * bytes to [onIndication] — the basis for event-driven updates instead of polling.
+     *
+     * Additive: 0x101 is a characteristic nothing else reads. The CCCD-enable is serialized with reads
+     * via [readMutex] so it can't collide with an in-flight exchange; the handler then fires on the
+     * link's single delivery thread (same thread the readers decrypt on, so the SAKE receive cipher
+     * stays ordered). The subscription is dropped when the link drops.
+     */
+    /** Clear the given IDD Status Changed flag bits (SRCP 0x030C) so future changes re-indicate. */
+    suspend fun resetStatusChanged(flags: ByteArray): Result<ByteArray> =
+        sessionRead("reset-status") { link, session, onResult ->
+            IddStatusReader(link, session).resetStatus(flags, onResult)
+        }
+
+    suspend fun subscribeStatusChanged(onIndication: (ByteArray) -> Unit): Boolean {
+        val link = linkProvider() ?: return false
+        val session = sessionProvider() ?: return false
+        return readMutex.withLock {
+            withContext(ioDispatcher) {
+                @Suppress("TooGenericExceptionCaught")
+                try {
+                    link.subscribe(MedtronicProtocol.IDD_STATUS_CHANGED_UUID) { pdu ->
+                        try {
+                            onIndication(session.decryptFromPump(pdu))
+                        } catch (e: Exception) {
+                            Timber.w("Status-changed decrypt failed: %s", e.javaClass.simpleName)
+                        }
+                    }
+                    true
+                } catch (e: Exception) {
+                    Timber.w(e, "subscribeStatusChanged failed")
+                    false
+                }
+            }
+        }
+    }
 
     /** Active basal rate currently delivered, with closed-loop (SmartGuard) detection. */
     suspend fun getBasalRate(): Result<BasalReading> =

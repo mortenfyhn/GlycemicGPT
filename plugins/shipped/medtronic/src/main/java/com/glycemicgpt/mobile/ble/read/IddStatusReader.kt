@@ -120,6 +120,16 @@ class IddStatusReader(
         }
     }
 
+    /**
+     * Reset (clear) the given IDD Status Changed flag bits (SRCP 0x030C) so future changes re-indicate.
+     * The pump latches each 0x101 bit until reset; without this it only indicates once. [flags] is the
+     * extended flags field exactly as received on 0x101.
+     */
+    fun resetStatus(flags: ByteArray, onResult: (Result<ByteArray>) -> Unit) {
+        val command = byteArrayOf(0x0C, 0x03) + flags // opcode 0x030C (LE) + flags to clear
+        sessionReader.srcpGet(MedtronicProtocol.IDD_SRCP_UUID, command, onResult)
+    }
+
     /** Active basal rate currently being delivered, with automated (closed-loop) detection. */
     fun readActiveBasalRate(onResult: (Result<BasalReading>) -> Unit) {
         val features =
