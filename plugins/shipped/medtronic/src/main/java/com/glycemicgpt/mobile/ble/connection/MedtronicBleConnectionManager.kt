@@ -94,6 +94,7 @@ class MedtronicBleConnectionManager(
     private val localName: String = DEFAULT_LOCAL_NAME,
     private val handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     private val pairingWaitMs: Long = DEFAULT_PAIRING_WAIT_MS,
+    private val subscribeWaitMs: Long = DEFAULT_SUBSCRIBE_WAIT_MS,
 ) {
 
     /** On-device constructor: real Android peripheral + dedicated SAKE worker thread. */
@@ -146,6 +147,12 @@ class MedtronicBleConnectionManager(
 
     @Volatile
     private var pairingWaitJob: Job? = null
+
+    // Watchdog for a pump that connects (ACL) but never subscribes SAKE -- a stale connection that
+    // lingers across our session lifecycle. If it fires, we force-drop the connection so the pump
+    // reconnects fresh and re-runs the handshake.
+    @Volatile
+    private var subscribeWaitJob: Job? = null
 
     private val handshakeListener = object : SakeHandshakeDriver.HandshakeListener {
         // Invoked on the worker thread already (the driver runs on [worker]).
@@ -312,6 +319,7 @@ class MedtronicBleConnectionManager(
             ConnectionState.RECONNECTING -> _connectionState.value = ConnectionState.CONNECTING
             else -> Unit
         }
+        armSubscribeWatchdog()
         onDiscovered?.invoke(
             DiscoveredDevice(
                 name = localName,
@@ -323,9 +331,30 @@ class MedtronicBleConnectionManager(
 
     private fun startAuthentication() {
         Timber.d("Pump subscribed to SAKE; starting handshake")
+        subscribeWaitJob?.cancel()
+        subscribeWaitJob = null
         _connectionState.value = ConnectionState.AUTHENTICATING
         armAuthTimeout()
         driver.onSubscribed()
+    }
+
+    /**
+     * A pump can connect at the ACL level yet never subscribe SAKE -- a stale connection lingering
+     * from a previous session. Nothing else would time that out (the auth timeout only starts once
+     * SAKE begins), so the state would sit at CONNECTING forever. Force-drop the connection; the
+     * disconnect re-advertises (auto-reconnect) and the pump reconnects fresh, re-subscribing SAKE.
+     */
+    private fun armSubscribeWatchdog() {
+        subscribeWaitJob?.cancel()
+        subscribeWaitJob = scope.launch {
+            delay(subscribeWaitMs)
+            worker.post {
+                if (_connectionState.value == ConnectionState.CONNECTING && sakeSession == null) {
+                    Timber.w("Pump connected but never subscribed SAKE in %d ms; forcing reconnect", subscribeWaitMs)
+                    peripheral.disconnectPeer()
+                }
+            }
+        }
     }
 
     private fun onCentralDisconnected(status: Int) {
@@ -415,6 +444,8 @@ class MedtronicBleConnectionManager(
         authTimeoutJob = null
         pairingWaitJob?.cancel()
         pairingWaitJob = null
+        subscribeWaitJob?.cancel()
+        subscribeWaitJob = null
     }
 
     // -- Helpers ------------------------------------------------------------
@@ -453,6 +484,9 @@ class MedtronicBleConnectionManager(
 
         /** SAKE has six round trips of 20-byte frames; 30s is generous even on a slow BLE link. */
         private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000L
+
+        /** How long a pump may stay connected without subscribing SAKE before we force a fresh reconnect. */
+        private const val DEFAULT_SUBSCRIBE_WAIT_MS = 8_000L
 
         /** First-pair window before suspecting the pump is bound to another phone (Sec. 7). */
         private const val DEFAULT_PAIRING_WAIT_MS = 60_000L

@@ -148,6 +148,16 @@ class AndroidMedtronicPeripheral(context: Context) : MedtronicPeripheral {
 
     override fun connectedDevice(): BluetoothDevice? = peer
 
+    override fun disconnectPeer() {
+        val server = gattServer ?: return
+        val device = peer ?: return
+        try {
+            server.cancelConnection(device)
+        } catch (e: SecurityException) {
+            Timber.w(e, "cancelConnection failed")
+        }
+    }
+
     override fun removeBond(address: String): Boolean {
         val device = adapter?.getRemoteDevice(address) ?: return false
         if (device.bondState != BluetoothDevice.BOND_BONDED) return false
