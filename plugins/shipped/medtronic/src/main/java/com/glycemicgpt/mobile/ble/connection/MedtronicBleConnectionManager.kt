@@ -497,10 +497,11 @@ class MedtronicBleConnectionManager(
 
         /**
          * How long the paired pump may stay connected without subscribing SAKE before we force a fresh
-         * reconnect. Generous: a real pump subscribes within a few seconds, so this only trips on a
-         * genuinely stuck link -- it must not cut off a pump that is mid-authentication.
+         * reconnect. Must be well clear of the pump's real subscribe latency: observed ~19s on a 780G
+         * reconnect, so this is set generously above that. It only trips on a genuinely stuck link and
+         * must never cut off a pump that is mid-authentication.
          */
-        private const val DEFAULT_SUBSCRIBE_WAIT_MS = 20_000L
+        private const val DEFAULT_SUBSCRIBE_WAIT_MS = 40_000L
 
         /** First-pair window before suspecting the pump is bound to another phone (Sec. 7). */
         private const val DEFAULT_PAIRING_WAIT_MS = 60_000L
