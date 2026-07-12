@@ -303,6 +303,16 @@ class MedtronicBleConnectionManager(
     }
 
     private fun onCentralConnected(address: String) {
+        // Our "Mobile …" advert is connectable by any central. When already paired, ignore anything
+        // that isn't the pump (e.g. a Pebble watch bonded to this same phone), so a foreign central
+        // can't occupy the single-peer slot and block the pump. Drop it; onCentralDisconnected then
+        // re-advertises so the pump can still connect.
+        val pairedAddress = credentialStore.getPairedAddress()
+        if (pairedAddress != null && !address.equals(pairedAddress, ignoreCase = true)) {
+            Timber.d("Ignoring non-pump central; waiting for the paired pump")
+            peripheral.disconnectPeer()
+            return
+        }
         // Debug level only: the MAC is a device identifier and WARN+/INFO can be Sentry-eligible.
         Timber.d("Pump connected: %s", address)
         pairingWaitJob?.cancel()
@@ -485,8 +495,12 @@ class MedtronicBleConnectionManager(
         /** SAKE has six round trips of 20-byte frames; 30s is generous even on a slow BLE link. */
         private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000L
 
-        /** How long a pump may stay connected without subscribing SAKE before we force a fresh reconnect. */
-        private const val DEFAULT_SUBSCRIBE_WAIT_MS = 8_000L
+        /**
+         * How long the paired pump may stay connected without subscribing SAKE before we force a fresh
+         * reconnect. Generous: a real pump subscribes within a few seconds, so this only trips on a
+         * genuinely stuck link -- it must not cut off a pump that is mid-authentication.
+         */
+        private const val DEFAULT_SUBSCRIBE_WAIT_MS = 20_000L
 
         /** First-pair window before suspecting the pump is bound to another phone (Sec. 7). */
         private const val DEFAULT_PAIRING_WAIT_MS = 60_000L
