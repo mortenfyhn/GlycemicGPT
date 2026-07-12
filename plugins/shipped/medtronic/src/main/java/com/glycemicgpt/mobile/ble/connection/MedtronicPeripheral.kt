@@ -96,6 +96,14 @@ interface MedtronicPeripheral {
     fun removeBond(address: String): Boolean
 
     /**
+     * Force-drop the current GATT-server connection to the pump. Used to recover from a stale ACL
+     * connection that the pump never re-subscribes SAKE on (it lingers "connected" at the OS level
+     * across our app/session lifecycle): cancelling it makes the pump reconnect fresh and re-run the
+     * handshake. No-op when no pump is connected.
+     */
+    fun disconnectPeer() {}
+
+    /**
      * The pump's [BluetoothDevice] captured when it connected to our GATT server (as the BLE
      * central), or `null` when no pump is connected. The Milestone D `BluetoothGatt`-client transport
      * opens a client connection back to *this* device over the same link to read the pump's
