@@ -166,6 +166,97 @@ data class IddInsulinOnBoard(
     }
 }
 
+/** SmartGuard (auto-mode) shield state (`tas_flags.py` AutoModeShieldState). */
+enum class AutoModeShieldState(val raw: Int) {
+    OPEN_LOOP(0x01),       // SmartGuard off (manual mode)
+    AUTO_BASAL_MODE(0x02), // SmartGuard on (normal)
+    SAFE_BASAL_MODE(0x03), // SmartGuard degraded to safe basal
+    UNKNOWN(-1),
+    ;
+
+    companion object {
+        fun from(raw: Int): AutoModeShieldState = entries.firstOrNull { it.raw == raw } ?: UNKNOWN
+    }
+}
+
+/** SmartGuard readiness / required-action state (`tas_flags.py` AutoModeReadinessState). */
+enum class AutoModeReadinessState(val raw: Int) {
+    NO_ACTION_REQUIRED(0),
+    BG_REQUIRED(1),
+    PROCESSING_BG(2),
+    WAIT_TO_ENTER_BG(3),
+    CALIBRATION_REQUIRED(4),
+    BG_RECOMMENDED(5),
+    UNKNOWN(-1),
+    ;
+
+    companion object {
+        fun from(raw: Int): AutoModeReadinessState = entries.firstOrNull { it.raw == raw } ?: UNKNOWN
+    }
+}
+
+/**
+ * Decoded custom "Get Therapy Algorithm States" response (SRCP `0x03FD` -> response `0x03FE`).
+ * Ported from OpenMinimed PythonPumpConnector `idd/status/tas.py`. Carries the SmartGuard/auto-mode
+ * shield + readiness state and the temp-target duration — none of which are in the IDD Status record.
+ *
+ * @property autoModeShieldState OPEN_LOOP = SmartGuard off; AUTO_BASAL_MODE = SmartGuard on.
+ * @property autoModeReadinessState e.g. BG_REQUIRED / CALIBRATION_REQUIRED (action needed to run auto).
+ * @property tempTargetDurationMin present & > 0 while a temporary target is active (minutes).
+ */
+data class IddTherapyAlgorithmStates(
+    val autoModeShieldState: AutoModeShieldState?,
+    val autoModeReadinessState: AutoModeReadinessState?,
+    val tempTargetDurationMin: Int?,
+) {
+    companion object {
+        private const val RESPONSE_OPCODE = 0x03FE
+        private const val FLAG_AUTO_MODE = 1 shl 0
+        private const val FLAG_LGS = 1 shl 1
+        private const val FLAG_PLGM = 1 shl 2
+        private const val FLAG_TEMP_TARGET = 1 shl 3
+        private const val FLAG_WAIT_TO_CALIBRATE = 1 shl 4
+        private const val FLAG_SAFE_BASAL = 1 shl 5
+        private const val MIN_BODY_SIZE = 4 // opcode(2) + flags(2)
+
+        /**
+         * @param useE2e kept false: this service never uses E2E protection (per upstream). Any trailing
+         *   bytes (incl. a stray E2E trailer) are tolerated, so the mandatory/optional fields still
+         *   parse — we don't reject on extra bytes the way the other IDD records do.
+         */
+        fun parse(decrypted: ByteArray, useE2e: Boolean = false): IddTherapyAlgorithmStates {
+            val body = stripIddE2e(decrypted, useE2e)
+            if (body.size < MIN_BODY_SIZE) {
+                throw MedtronicReadException("IDD TAS too short: need >= $MIN_BODY_SIZE bytes, got ${body.size}")
+            }
+            val opcode = MedtronicCodec.readUIntLe(body, 0, 2)
+            if (opcode != RESPONSE_OPCODE) {
+                throw MedtronicReadException("IDD TAS wrong opcode 0x%04x, wanted 0x%04x".format(opcode, RESPONSE_OPCODE))
+            }
+            val flags = MedtronicCodec.readUIntLe(body, 2, 2)
+            var offset = MIN_BODY_SIZE
+            fun consume(n: Int, field: String): Int {
+                if (offset + n > body.size) throw MedtronicReadException("IDD TAS missing $field field")
+                return MedtronicCodec.readUIntLe(body, offset, n).also { offset += n }
+            }
+            // Field order mirrors tas.py exactly: auto-mode (shield+readiness), PLGM, LGS, temp target,
+            // wait-to-calibrate, safe basal.
+            var shield: AutoModeShieldState? = null
+            var readiness: AutoModeReadinessState? = null
+            if (flags and FLAG_AUTO_MODE != 0) {
+                shield = AutoModeShieldState.from(consume(1, "shield"))
+                readiness = AutoModeReadinessState.from(consume(1, "readiness"))
+            }
+            if (flags and FLAG_PLGM != 0) consume(1, "plgm")
+            if (flags and FLAG_LGS != 0) consume(1, "lgs")
+            val tempTarget = if (flags and FLAG_TEMP_TARGET != 0) consume(2, "temp-target-duration") else null
+            if (flags and FLAG_WAIT_TO_CALIBRATE != 0) consume(2, "wait-to-calibrate")
+            if (flags and FLAG_SAFE_BASAL != 0) consume(2, "safe-basal")
+            return IddTherapyAlgorithmStates(shield, readiness, tempTarget)
+        }
+    }
+}
+
 /** Basal delivery context (`active_basal_rate_delivery.py` BasalDeliveryContext). */
 enum class BasalDeliveryContext(val raw: Int) {
     UNDETERMINED(0x0F),

@@ -109,6 +109,17 @@ class IddStatusReader(
         }
     }
 
+    /**
+     * SmartGuard/auto-mode state + temp-target via the custom "Get Therapy Algorithm States" command
+     * (0x03FD -> 0x03FE). This is the authoritative SmartGuard on/off signal (the basal-delivery
+     * context is unreliable) and the only place temp-target is exposed. Ported from tas.py.
+     */
+    fun readTherapyAlgorithmStates(onResult: (Result<IddTherapyAlgorithmStates>) -> Unit) {
+        sessionReader.srcpGet(MedtronicProtocol.IDD_SRCP_UUID, REQUEST_GET_THERAPY_ALGORITHM_STATES) { result ->
+            onResult(result.mapCatching { decrypted -> IddTherapyAlgorithmStates.parse(decrypted) })
+        }
+    }
+
     /** Active basal rate currently being delivered, with automated (closed-loop) detection. */
     fun readActiveBasalRate(onResult: (Result<BasalReading>) -> Unit) {
         val features =
@@ -183,6 +194,7 @@ class IddStatusReader(
         // SRCP request opcodes, little-endian (idd/status/opcodes.py IddStatusReaderOpCode).
         private val REQUEST_GET_INSULIN_ON_BOARD = byteArrayOf(0xF3.toByte(), 0x03) // 0x03F3
         private val REQUEST_GET_ACTIVE_BASAL_RATE = byteArrayOf(0x65, 0x03) // 0x0365
+        private val REQUEST_GET_THERAPY_ALGORITHM_STATES = byteArrayOf(0xFD.toByte(), 0x03) // 0x03FD
 
         /** 700-series reservoir hardware maximum (IU); a reading above this is rejected, not clamped. */
         const val MAX_RESERVOIR_UNITS = 300.0

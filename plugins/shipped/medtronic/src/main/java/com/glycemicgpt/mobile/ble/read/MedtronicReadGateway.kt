@@ -121,6 +121,12 @@ class MedtronicReadGateway(
             IddStatusReader(link, session).readStatusState(onResult)
         }
 
+    /** SmartGuard/auto-mode state + temp-target ("Get Therapy Algorithm States", 0x03FD). */
+    suspend fun getTherapyState(): Result<IddTherapyAlgorithmStates> =
+        sessionRead("therapy-states") { link, session, onResult ->
+            IddStatusReader(link, session).readTherapyAlgorithmStates(onResult)
+        }
+
     /** Active basal rate currently delivered, with closed-loop (SmartGuard) detection. */
     suspend fun getBasalRate(): Result<BasalReading> =
         sessionRead("basal") { link, session, onResult ->
