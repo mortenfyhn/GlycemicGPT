@@ -115,6 +115,12 @@ class MedtronicReadGateway(
             IddStatusReader(link, session).readIoB(onResult)
         }
 
+    /** Therapy/operational/sensor state (IDD Status record) — e.g. RUN vs STOP (suspended). */
+    suspend fun getStatusState(): Result<MedtronicIddStatusState> =
+        sessionRead("status") { link, session, onResult ->
+            IddStatusReader(link, session).readStatusState(onResult)
+        }
+
     /** Active basal rate currently delivered, with closed-loop (SmartGuard) detection. */
     suspend fun getBasalRate(): Result<BasalReading> =
         sessionRead("basal") { link, session, onResult ->
