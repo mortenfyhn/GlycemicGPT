@@ -151,7 +151,7 @@ class MedtronicReadGateway(
             withContext(ioDispatcher) {
                 @Suppress("TooGenericExceptionCaught")
                 try {
-                    link.subscribe(MedtronicProtocol.IDD_STATUS_CHANGED_UUID) { pdu ->
+                    link.subscribePersistent(MedtronicProtocol.IDD_STATUS_CHANGED_UUID) { pdu ->
                         try {
                             onIndication(session.decryptFromPump(pdu))
                         } catch (e: Exception) {

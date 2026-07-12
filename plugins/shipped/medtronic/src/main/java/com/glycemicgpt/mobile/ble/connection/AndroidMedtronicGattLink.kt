@@ -194,7 +194,13 @@ class AndroidMedtronicGattLink(
         }
     }
 
-    override fun subscribe(characteristic: UUID, onPdu: (ByteArray) -> Unit) {
+    override fun subscribe(characteristic: UUID, onPdu: (ByteArray) -> Unit) =
+        doSubscribe(characteristic, onPdu, persistent = false)
+
+    override fun subscribePersistent(characteristic: UUID, onPdu: (ByteArray) -> Unit) =
+        doSubscribe(characteristic, onPdu, persistent = true)
+
+    private fun doSubscribe(characteristic: UUID, onPdu: (ByteArray) -> Unit, persistent: Boolean) {
         try {
             opLock.withLock {
                 val link = ensureConnected()
@@ -214,11 +220,12 @@ class AndroidMedtronicGattLink(
                 // Register the handler before enabling notifications so a PDU delivered the instant the
                 // CCCD takes effect is not lost. Re-subscribing replaces the handler (seam contract).
                 // Record the owning client so a deferred unsubscribe can't disable a later connection.
-                val sub = ActiveSubscription(resolved, onPdu, link)
+                val sub = ActiveSubscription(resolved, onPdu, link, persistent)
                 handlers[characteristic] = sub
                 val isIndication = isIndication(char)
                 val enable = if (isIndication) CCCD_ENABLE_INDICATION else CCCD_ENABLE_NOTIFICATION
-                Timber.v("GATT subscribe %s (%s)", characteristic, if (isIndication) "indication" else "notification")
+                Timber.v("GATT subscribe %s (%s%s)", characteristic,
+                    if (isIndication) "indication" else "notification", if (persistent) ", persistent" else "")
                 // The CCCD write completes before this returns, so notifications are effective before
                 // the caller's subsequent control-point write (AC3).
                 val outcome = awaitGatt("subscribe", characteristic) { writeDescriptor(link, cccd, enable) }
@@ -229,11 +236,12 @@ class AndroidMedtronicGattLink(
                     handlers.remove(characteristic, sub)
                     return
                 }
-                // [cancelAllSubscriptions] runs lock-free from the cancellation handler, so it can
-                // clear this registration while the CCCD ack above is still in flight. Arming the
-                // watchdog then would leave a stale timer that later fires against an unrelated live
-                // exchange and drops its handlers. Arm only if this registration is still current.
-                if (handlers[characteristic] === sub) armWatchdog()
+                // Persistent subscriptions are not watched (they must outlive individual reads).
+                // For per-read subscriptions: [cancelAllSubscriptions] runs lock-free from the
+                // cancellation handler, so it can clear this registration while the CCCD ack above is
+                // still in flight. Arming the watchdog then would leave a stale timer that later fires
+                // against an unrelated live exchange. Arm only if this registration is still current.
+                if (!persistent && handlers[characteristic] === sub) armWatchdog()
             }
         } catch (e: MedtronicReadException) {
             // On a timeout [awaitGatt] already tore the connection down, clearing handlers; nothing to undo.
@@ -257,11 +265,12 @@ class AndroidMedtronicGattLink(
         // from a coroutine's cancellation handler -- which on a timeout runs on kotlinx's process-global
         // scheduler thread, where blocking would stall every delay/withTimeout in the app. Defer them to
         // the cleanup thread, the same discipline as [unsubscribe].
-        if (handlers.isEmpty()) return
-        val orphaned = handlers.values.toList()
-        handlers.clear()
+        // Keep persistent (push) subscriptions; only tear down the per-read ones on a read cancel.
+        val orphaned = handlers.entries.filter { !it.value.persistent }
+        if (orphaned.isEmpty()) return
+        orphaned.forEach { handlers.remove(it.key, it.value) }
         cancelWatchdog()
-        watchdog.execute { for (sub in orphaned) disableNotifications("cancel", sub) }
+        watchdog.execute { for (e in orphaned) disableNotifications("cancel", e.value) }
     }
 
     // -- Connection / discovery ---------------------------------------------
@@ -477,7 +486,9 @@ class AndroidMedtronicGattLink(
     }
 
     private fun onWatchdogFire() {
-        if (handlers.isEmpty()) return
+        // Only per-read subscriptions are "dangling"; persistent ones (push) must survive.
+        val orphaned = handlers.entries.filter { !it.value.persistent }
+        if (orphaned.isEmpty()) return
         // The driving read's coroutine has been cancelled by the gateway's operation timeout without the
         // reader unsubscribing (it only unsubscribes on a pump response). Release every dangling
         // subscription so the timed-out read leaves no notifications that desync the next exchange.
@@ -485,9 +496,8 @@ class AndroidMedtronicGattLink(
         cancelWatchdog()
         // Drop handlers first (lock-free): the no-dangling-notification guarantee. The CCCD disables
         // then run serialized under [opLock] so each owns its own completion slot.
-        val orphaned = handlers.values.toList()
-        handlers.clear()
-        for (sub in orphaned) disableNotifications("watchdog-release", sub)
+        orphaned.forEach { handlers.remove(it.key, it.value) }
+        for (e in orphaned) disableNotifications("watchdog-release", e.value)
     }
 
     // -- GATT callback (binder thread) --------------------------------------
@@ -641,6 +651,9 @@ class AndroidMedtronicGattLink(
         val resolved: ResolvedChar,
         val onPdu: (ByteArray) -> Unit,
         val ownerGatt: BluetoothGatt,
+        // Persistent subscriptions (e.g. IDD Status Changed push) survive the watchdog and
+        // cancelAllSubscriptions, which only clean up the short-lived per-read subscriptions.
+        val persistent: Boolean = false,
     )
 
     private class GattOutcome(val status: Int, val value: ByteArray?)

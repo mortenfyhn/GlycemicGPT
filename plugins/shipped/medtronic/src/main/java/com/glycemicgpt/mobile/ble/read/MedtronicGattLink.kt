@@ -54,6 +54,13 @@ interface MedtronicGattLink {
      */
     fun subscribe(characteristic: UUID, onPdu: (ByteArray) -> Unit)
 
+    /**
+     * Like [subscribe], but the subscription is **persistent**: it is exempt from the per-read
+     * subscription watchdog and from [cancelAllSubscriptions], so it survives across individual reads
+     * (used for the IDD Status Changed "push" stream). Default no-op for test fakes.
+     */
+    fun subscribePersistent(characteristic: UUID, onPdu: (ByteArray) -> Unit) {}
+
     /** Disable notifications and drop the handler for [characteristic]. */
     fun unsubscribe(characteristic: UUID)
 
