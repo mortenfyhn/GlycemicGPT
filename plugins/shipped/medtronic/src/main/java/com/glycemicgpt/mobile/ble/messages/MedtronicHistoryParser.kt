@@ -24,6 +24,7 @@ import com.glycemicgpt.mobile.domain.model.PumpActivityMode
 import com.glycemicgpt.mobile.domain.pump.SafetyLimits
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.Base64
 import kotlin.math.roundToInt
@@ -445,7 +446,11 @@ object MedtronicHistoryParser {
                     MedtronicCodec.readUIntLe(p, 5, 1), // hour
                     MedtronicCodec.readUIntLe(p, 6, 1), // minute
                     MedtronicCodec.readUIntLe(p, 7, 1), // second
-                ).toInstant(ZoneOffset.UTC)
+                    // The pump stores naive LOCAL wall-clock (no TZ/DST field) — it's set to the
+                    // user's local time. Interpreting it as UTC shifts every history timestamp by the
+                    // local offset (e.g. +2h in CEST), landing readings in the future. Anchor in the
+                    // device's zone instead.
+                ).atZone(ZoneId.systemDefault()).toInstant()
             } catch (e: java.time.DateTimeException) {
                 Timber.w(e, "Invalid reference-time datetime; offsets after it cannot be anchored")
                 null
