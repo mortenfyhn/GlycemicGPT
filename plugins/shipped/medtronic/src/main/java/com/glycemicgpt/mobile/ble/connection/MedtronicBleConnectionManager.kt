@@ -304,9 +304,11 @@ class MedtronicBleConnectionManager(
 
     private fun onCentralConnected(address: String) {
         // Our "Mobile …" advert is connectable by any central. When already paired, ignore anything
-        // that isn't the pump (e.g. a Pebble watch bonded to this same phone), so a foreign central
-        // can't occupy the single-peer slot and block the pump. Drop it; onCentralDisconnected then
-        // re-advertises so the pump can still connect.
+        // that isn't the pump (e.g. another bonded BLE central such as a companion wearable), so a
+        // foreign central can't occupy the single-peer slot and block the pump. Drop it;
+        // onCentralDisconnected then re-advertises so the pump can still connect. The equality check
+        // relies on the pump presenting its bonded identity address on reconnect (Android resolves a
+        // bonded peer's private address to that identity); confirm on-hardware — TODO(48.A2).
         val pairedAddress = credentialStore.getPairedAddress()
         if (pairedAddress != null && !address.equals(pairedAddress, ignoreCase = true)) {
             Timber.d("Ignoring non-pump central; waiting for the paired pump")
@@ -353,12 +355,16 @@ class MedtronicBleConnectionManager(
      * from a previous session. Nothing else would time that out (the auth timeout only starts once
      * SAKE begins), so the state would sit at CONNECTING forever. Force-drop the connection; the
      * disconnect re-advertises (auto-reconnect) and the pump reconnects fresh, re-subscribing SAKE.
+     * A pump that keeps reconnecting yet never subscribes loops this every [subscribeWaitMs]; that is
+     * the intended stale-link recovery, but the loop is unbounded (no fault is surfaced).
      */
     private fun armSubscribeWatchdog() {
         subscribeWaitJob?.cancel()
         subscribeWaitJob = scope.launch {
             delay(subscribeWaitMs)
             worker.post {
+                // Still pre-auth: sakeSession stays null until CONNECTED, so the second clause is
+                // defensive (state == CONNECTING already implies it).
                 if (_connectionState.value == ConnectionState.CONNECTING && sakeSession == null) {
                     Timber.w("Pump connected but never subscribed SAKE in %d ms; forcing reconnect", subscribeWaitMs)
                     peripheral.disconnectPeer()

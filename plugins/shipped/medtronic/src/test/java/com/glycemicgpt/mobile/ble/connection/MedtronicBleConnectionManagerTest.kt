@@ -53,6 +53,7 @@ class MedtronicBleConnectionManagerTest {
         scope: CoroutineScope = testScope,
         handshakeTimeoutMs: Long = 30_000L,
         pairingWaitMs: Long = 60_000L,
+        subscribeWaitMs: Long = 40_000L,
     ) = MedtronicBleConnectionManager(
         peripheral = peripheral,
         credentialStore = credentialStore,
@@ -61,6 +62,7 @@ class MedtronicBleConnectionManagerTest {
         keyDatabase = SakeVectors.customServerKeyDb(),
         handshakeTimeoutMs = handshakeTimeoutMs,
         pairingWaitMs = pairingWaitMs,
+        subscribeWaitMs = subscribeWaitMs,
     )
 
     /** Drive a full SAKE handshake through the captured listener, leaving the manager CONNECTED. */
@@ -186,6 +188,33 @@ class MedtronicBleConnectionManagerTest {
 
         assertEquals(ConnectionState.AUTH_FAILED, manager.connectionState.value)
         assertEquals(MedtronicConnectionFault.HANDSHAKE_TIMEOUT, manager.fault.value)
+    }
+
+    @Test
+    fun `subscribe watchdog forces reconnect when the pump connects but never subscribes`() {
+        val manager = newManager(subscribeWaitMs = 5_000L)
+        manager.startSession()
+        listener.onPumpConnected(PUMP_ADDRESS) // ACL connect, but SAKE never begins
+        assertEquals(ConnectionState.CONNECTING, manager.connectionState.value)
+
+        testScope.advanceTimeBy(5_001L)
+        testScope.runCurrent()
+
+        verify { peripheral.disconnectPeer() }
+    }
+
+    @Test
+    fun `subscribe watchdog does not fire once the pump subscribes`() {
+        val manager = newManager(subscribeWaitMs = 5_000L)
+        manager.startSession()
+        listener.onPumpConnected(PUMP_ADDRESS)
+        listener.onSakeSubscribed() // SAKE begins before the watchdog deadline
+        assertEquals(ConnectionState.AUTHENTICATING, manager.connectionState.value)
+
+        testScope.advanceTimeBy(5_001L)
+        testScope.runCurrent()
+
+        verify(exactly = 0) { peripheral.disconnectPeer() }
     }
 
     @Test
